@@ -2,45 +2,14 @@
 
 This document collects implementation detail that is useful for maintainers and downstream integrators but is too detailed for the main `README.md`.
 
-## Per-frame time model
+## Calculating frame absolute time
 
-The library exposes two distinct time axes for each frame:
+Absolute UTC time is determined from GNSS metadata, but there are some complications: 
 
-- `pts`
-  - playback timeline from the encoded video stream
-- `relativeTime`
-  - capture-relative timeline used to model when frames were actually acquired
-
-These can diverge for timelapse-like files.
-
-Example:
-
-- playback stream may be encoded at about `29.97 fps`
-- actual capture cadence may be `2 fps`
-
-In that case:
-
-- `pts` advances by about `0.0333667 s`
-- `relativeTime` advances by `0.5 s`
-
-### Absolute time policy
-
-Absolute UTC time should be anchored from trusted GNSS metadata, not from nominal video fps.
-
-Important rules:
-
-- GNSS can be missing at the start of a video
+- GNSS can be missing or unreliable at the start of a video
 - GNSS can drop out during a video
-- early GNSS can contain implausible absolute dates, including the wrong year
-- presentation timestamp (`PTS`) is the reliable relative clock inside the video
 
-So the working model is:
-
-- `PTS` gives reliable relative ordering and playback timing
-- trusted GNSS gives absolute UTC anchoring
-- if the first trusted GNSS anchor occurs later in the video, earlier frames can be assigned UTC by retrograde extrapolation from that later anchor using the relative/capture timeline
-
-### Flow chart
+So in order to determine the absolute timestamp for every frame we use a combination of GNSS and extrapolation using PTS (presentation timestamp). However there is an additional complication: for timelapse videos PTS is the timestamp at recommended playback speed (usually 29.97 fps) so this has to be adjusted for the capture frame rate which is provided by the ???? GPMF message.
 
 ```mermaid
 flowchart TD
