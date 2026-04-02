@@ -296,16 +296,22 @@ public final class FrameMetadataExtractor {
 
         List<SignalSamplePoint> out = new ArrayList<>();
         int totalSampleCount = groups.stream().mapToInt(g -> g.samples().size()).sum();
-        if ("capture_timeline".equals(captureTimeline.mode())
-                && captureTimeline.relativeFrameTimes().size() == totalSampleCount) {
-            int globalIndex = 0;
-            for (EntryGroup group : groups) {
-                for (double[] sample : group.samples()) {
-                    out.add(new SignalSamplePoint(captureTimeline.relativeFrameTimes().get(globalIndex), sample, globalIndex));
-                    globalIndex++;
+        if ("capture_timeline".equals(captureTimeline.mode()) && !captureTimeline.relativeFrameTimes().isEmpty()) {
+            if (captureTimeline.relativeFrameTimes().size() == totalSampleCount) {
+                int globalIndex = 0;
+                for (EntryGroup group : groups) {
+                    for (double[] sample : group.samples()) {
+                        out.add(new SignalSamplePoint(captureTimeline.relativeFrameTimes().get(globalIndex), sample, globalIndex));
+                        globalIndex++;
+                    }
                 }
+                return out;
             }
-            return out;
+            return buildCaptureAlignedSignalSamplePoints(groups,
+                    framePts,
+                    videoDuration,
+                    captureTimeline.relativeFrameTimes(),
+                    medianPacketDelta);
         }
 
         int globalIndex = 0;
@@ -346,9 +352,6 @@ public final class FrameMetadataExtractor {
         List<TelemetryEntry> gps9Entries = telemetry.signals().get("GPS9");
         int frameCount = normalizedFramePts.size();
         int gps9SampleCount = sampleCount(gps9Entries);
-        if (gps9SampleCount != frameCount) {
-            return new CaptureTimeline("pts", normalizedFramePts);
-        }
 
         Double framePtsSpacing = medianPositiveDelta(normalizedFramePts);
         Double gps9AbsoluteSpacing = medianGps9AbsoluteDelta(gps9Entries);
@@ -363,10 +366,19 @@ public final class FrameMetadataExtractor {
         for (int i = 0; i < frameCount; i++) {
             relativeTimes.add(i * gps9AbsoluteSpacing);
         }
-        warnings.add(String.format(Locale.ROOT,
-                "Timelapse-like capture cadence detected: using capture timeline %.6fs instead of playback PTS spacing %.6fs.",
-                gps9AbsoluteSpacing,
-                framePtsSpacing));
+        if (gps9SampleCount != frameCount) {
+            warnings.add(String.format(Locale.ROOT,
+                    "Timelapse-like capture cadence detected with GPS9/frame mismatch (%d GPS9 samples vs %d frames): using capture timeline %.6fs instead of playback PTS spacing %.6fs.",
+                    gps9SampleCount,
+                    frameCount,
+                    gps9AbsoluteSpacing,
+                    framePtsSpacing));
+        } else {
+            warnings.add(String.format(Locale.ROOT,
+                    "Timelapse-like capture cadence detected: using capture timeline %.6fs instead of playback PTS spacing %.6fs.",
+                    gps9AbsoluteSpacing,
+                    framePtsSpacing));
+        }
         return new CaptureTimeline("capture_timeline", List.copyOf(relativeTimes));
     }
 
@@ -412,6 +424,84 @@ public final class FrameMetadataExtractor {
             }
         }
         return null;
+    }
+
+    private static List<SignalSamplePoint> buildCaptureAlignedSignalSamplePoints(List<EntryGroup> groups,
+                                                                                  List<Double> framePts,
+                                                                                  double videoDuration,
+                                                                                  List<Double> captureRelativeTimes,
+                                                                                  Double medianPacketDelta) {
+        List<SignalSamplePoint> out = new ArrayList<>();
+        int globalIndex = 0;
+        for (int groupIndex = 0; groupIndex < groups.size(); groupIndex++) {
+            EntryGroup group = groups.get(groupIndex);
+            int sampleCount = group.samples().size();
+            if (sampleCount <= 0) {
+                continue;
+            }
+            Double startPts = group.packetPts();
+            Double nextPts = nextPacketPts(groups, groupIndex + 1);
+            if (startPts == null || !Double.isFinite(startPts)) {
+                startPts = globalIndex == 0 ? 0.0d : out.get(out.size() - 1).pts();
+            }
+            double interval = medianPacketDelta == null ? 0.0d : medianPacketDelta;
+            if (nextPts != null && nextPts > startPts) {
+                interval = (nextPts - startPts) / Math.max(sampleCount, 1);
+            }
+            if (!Double.isFinite(interval) || interval <= 0.0d) {
+                interval = fallbackUniformSampleInterval(groups, framePts, videoDuration);
+            }
+            for (int sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++) {
+                double samplePlaybackPts = startPts + sampleIndex * interval;
+                double sampleCaptureTime = mapPlaybackPtsToCaptureTime(framePts, captureRelativeTimes, samplePlaybackPts);
+                out.add(new SignalSamplePoint(sampleCaptureTime, group.samples().get(sampleIndex), globalIndex));
+                globalIndex++;
+            }
+        }
+        out.sort(Comparator.comparingDouble(SignalSamplePoint::pts));
+        return out;
+    }
+
+    private static double mapPlaybackPtsToCaptureTime(List<Double> framePts,
+                                                      List<Double> captureRelativeTimes,
+                                                      double samplePlaybackPts) {
+        if (captureRelativeTimes.isEmpty()) {
+            return samplePlaybackPts;
+        }
+        if (framePts.isEmpty() || framePts.size() != captureRelativeTimes.size()) {
+            int frameIndex = Math.max(0, Math.min(captureRelativeTimes.size() - 1, (int) Math.round(samplePlaybackPts)));
+            return captureRelativeTimes.get(frameIndex);
+        }
+
+        int lastFrameIndex = framePts.size() - 1;
+        if (samplePlaybackPts <= framePts.get(0)) {
+            return captureRelativeTimes.get(0);
+        }
+        if (samplePlaybackPts >= framePts.get(lastFrameIndex)) {
+            return captureRelativeTimes.get(lastFrameIndex);
+        }
+
+        int hit = Collections.binarySearch(framePts, samplePlaybackPts);
+        if (hit >= 0) {
+            return captureRelativeTimes.get(hit);
+        }
+
+        int insertionPoint = -hit - 1;
+        int lowerIndex = Math.max(0, insertionPoint - 1);
+        int upperIndex = Math.min(lastFrameIndex, insertionPoint);
+        double lowerPts = framePts.get(lowerIndex);
+        double upperPts = framePts.get(upperIndex);
+        double lowerTime = captureRelativeTimes.get(lowerIndex);
+        double upperTime = captureRelativeTimes.get(upperIndex);
+        if (!(upperPts > lowerPts)) {
+            return lowerTime;
+        }
+        double fraction = (samplePlaybackPts - lowerPts) / (upperPts - lowerPts);
+        if (!Double.isFinite(fraction)) {
+            fraction = 0.0d;
+        }
+        fraction = Math.max(0.0d, Math.min(1.0d, fraction));
+        return lowerTime + fraction * (upperTime - lowerTime);
     }
 
     private static double fallbackUniformSampleInterval(List<EntryGroup> groups,

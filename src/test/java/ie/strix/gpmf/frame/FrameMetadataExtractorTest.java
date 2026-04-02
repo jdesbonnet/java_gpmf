@@ -147,6 +147,70 @@ class FrameMetadataExtractorTest {
     }
 
     @Test
+    void buildUsesCaptureTimelineWithOneOffGps9FrameMismatch() {
+        Map<String, List<TelemetryEntry>> signals = new LinkedHashMap<>();
+        signals.put("GPS9", List.of(
+                gps9Entry(0.0d, gps9Sample(53.0d, -8.0d, 50.0d, utc("2026-01-01T00:00:00Z"), 1.0d, 3.0d)),
+                gps9Entry(0.033d, gps9Sample(53.0001d, -8.0001d, 50.1d, utc("2026-01-01T00:00:00.500Z"), 1.0d, 3.0d)),
+                gps9Entry(0.067d, gps9Sample(53.0002d, -8.0002d, 50.2d, utc("2026-01-01T00:00:01Z"), 1.0d, 3.0d)),
+                gps9Entry(0.100d, gps9Sample(53.0003d, -8.0003d, 50.3d, utc("2026-01-01T00:00:01.500Z"), 1.0d, 3.0d)),
+                gps9Entry(0.133d, gps9Sample(53.0004d, -8.0004d, 50.4d, utc("2026-01-01T00:00:02Z"), 1.0d, 3.0d))));
+        signals.put("MNOR", List.of(
+                vectorEntry("MNOR", 0.0d, 0.0d, 0.1d, 0.2d),
+                vectorEntry("MNOR", 0.033d, 1.0d, 1.1d, 1.2d),
+                vectorEntry("MNOR", 0.067d, 2.0d, 2.1d, 2.2d),
+                vectorEntry("MNOR", 0.100d, 3.0d, 3.1d, 3.2d)));
+        signals.put("GRAV", List.of(
+                vectorEntry("GRAV", 0.0d, 10.0d, 10.1d, 10.2d),
+                vectorEntry("GRAV", 0.033d, 11.0d, 11.1d, 11.2d),
+                vectorEntry("GRAV", 0.067d, 12.0d, 12.1d, 12.2d),
+                vectorEntry("GRAV", 0.100d, 13.0d, 13.1d, 13.2d)));
+
+        DecodedTelemetry telemetry = new DecodedTelemetry(
+                signals,
+                new ExtractionProvenance(
+                        "auto",
+                        "ffmpeg_packetized",
+                        "GS_TIMELAPSE_MISMATCH",
+                        2,
+                        3,
+                        true,
+                        false,
+                        29.97d,
+                        4,
+                        0.100d,
+                        5888,
+                        1920,
+                        Map.of("GPS9", 5, "MNOR", 4, "GRAV", 4),
+                        Map.of("GPS9", 5, "MNOR", 4, "GRAV", 4),
+                        List.of()));
+
+        FrameMetadataSeries series = new FrameMetadataExtractor().build(
+                Path.of("GS_TIMELAPSE_MISMATCH.360"),
+                telemetry,
+                List.of(0.0d, 0.033d, 0.067d, 0.100d));
+
+        assertEquals("gps9_capture_timeline_anchored", series.timeUtcMode());
+        assertEquals(4, series.frames().size());
+
+        FrameMetadata frame0 = series.frames().get(0);
+        assertEquals(0.0d, frame0.pts());
+        assertEquals(0.0d, frame0.relativeTime());
+        assertEquals("2026-01-01T00:00:00Z", frame0.timeUtc().toString());
+
+        FrameMetadata frame1 = series.frames().get(1);
+        assertEquals(0.033d, frame1.pts());
+        assertEquals(0.5d, frame1.relativeTime());
+        assertEquals("2026-01-01T00:00:00.500Z", frame1.timeUtc().toString());
+
+        FrameMetadata frame3 = series.frames().get(3);
+        assertEquals(0.100d, frame3.pts());
+        assertEquals(1.5d, frame3.relativeTime());
+        assertEquals("2026-01-01T00:00:01.500Z", frame3.timeUtc().toString());
+    }
+
+
+    @Test
     void approximateFramePtsUsesCheapStreamProvenance() {
         DecodedTelemetry telemetry = new DecodedTelemetry(
                 Map.of(),
