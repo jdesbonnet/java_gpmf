@@ -1,7 +1,5 @@
 # Technical Notes
 
-This document collects implementation detail that is useful for maintainers and downstream integrators but is too detailed for the main `README.md`.
-
 ## Calculating frame absolute time
 
 Absolute UTC time is determined from GNSS metadata, but there are some complications: 
@@ -85,3 +83,8 @@ The `frames-json` CLI command writes one JSON record per frame with:
 - `gravityPitch`
 
 If telemetry for a field is unavailable on a frame, the field is written as `null`.
+
+## References
+
+ * https://github.com/gopro/gpmf-parser
+   
