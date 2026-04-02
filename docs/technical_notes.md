@@ -9,7 +9,7 @@ Absolute UTC time is determined from GNSS metadata, but there are some complicat
 - GNSS can be missing or unreliable at the start of a video
 - GNSS can drop out during a video
 
-So in order to determine the absolute timestamp for every frame we use a combination of GNSS and extrapolation using PTS (presentation timestamp). However there is an additional complication: for timelapse videos PTS is the timestamp at recommended playback speed (usually 29.97 fps) so this has to be adjusted for the capture frame rate which is provided by the ???? GPMF message.
+So in order to determine the absolute timestamp for every frame we use a combination of GNSS and extrapolation using PTS (presentation timestamp). However there is an additional complication: for timelapse videos PTS is the timestamp at recommended playback speed (usually 29.97 fps) so this has to be adjusted for the capture frame rate which is provided by the RATE GPMF message.
 
 ```mermaid
 flowchart TD
